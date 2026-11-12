@@ -1,0 +1,41 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: boss
+      POSTGRES_USER: boss
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me_in_prod}
+    volumes:
+      - boss_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U boss -d boss"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg://boss:${POSTGRES_PASSWORD:-change_me_in_prod}@db:5432/boss
+      BOSS_SECRET_KEY: ${BOSS_SECRET_KEY:-replace_with_real_secret}
+      BOSS_STORAGE_DIR: /data/storage
+      BOSS_BACKUP_DIR: /data/backups
+      BOSS_ENV: production
+    volumes:
+      - boss_storage:/data/storage
+      - boss_backups:/data/backups
+    ports:
+      - "127.0.0.1:8000:8000"
+
+volumes:
+  boss_pgdata:
+  boss_storage:
+  boss_backups:
+
