@@ -1,3 +1,9 @@
+from decimal import Decimal
+from typing import Annotated
+
+from fastapi import Depends, HTTPException
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+from sqlalchemy.exc import IntegrityError
 from datetime import date
 from decimal import Decimal
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
@@ -145,36 +151,72 @@ def api_create_location(payload: LocationIn, owner: User = Depends(require_owner
 
 
 @router.get("/skus")
-def api_list_skus(q: str | None = None, user: User = Depends(require_action("inventory.view")), db: Session = Depends(get_db)):
-    query = db.query(SKU)
-    if q:
-        like = f"%{q.strip()}%"
-        query = query.filter((SKU.sku_code.ilike(like)) | (SKU.name.ilike(like)) | (SKU.barcode.ilike(like)))
-    rows = query.order_by(SKU.id.asc()).all()
-    return [
-        {
-            "id": s.id,
-            "sku_code": s.sku_code,
-            "barcode": s.barcode,
-            "name": s.name,
-            "brand": s.brand,
-            "category": s.category,
-            "item_type": s.item_type,
-            "purchase_cost": str(s.purchase_cost) if user.role == "OWNER" else None,
-            "selling_price": str(s.selling_price),
-            "mrp": str(s.mrp),
-            "gst_rate": str(s.gst_rate),
-            "warranty_eligible": s.warranty_eligible,
-            "reorder_point": s.reorder_point,
-            "strategic_role": s.strategic_role,
-        }
-        for s in rows
-    ]
+
+Amount = Annotated[Decimal, Field(ge=0, allow_inf_nan=False)]
 
 
-@router.post("/skus")
-def api_create_sku(payload: SKUIn, user: User = Depends(require_action("sku.create")), db: Session = Depends(get_db)):
-    return create_sku(db, user, payload.model_dump())
+class SKUUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    sku_code: str | None = Field(default=None, min_length=1)
+    barcode: str | None = None
+    name: str | None = Field(default=None, min_length=1)
+    brand: str | None = None
+    category: str | None = None
+    item_type: str | None = None
+    purchase_cost: Amount | None = None
+    selling_price: Amount | None = None
+    mrp: Amount | None = None
+    gst_rate: Decimal | None = Field(
+        default=None, ge=0, le=100, allow_inf_nan=False
+    )
+    warranty_eligible: bool | None = None
+    reorder_point: int | None = Field(default=None, ge=0)
+    strategic_role: str | None = None
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def reject_explicit_null(cls, value):
+        if value is None:
+            raise ValueError("फ़ील्ड को null के बजाय छोड़ दें")
+        return value
+
+
+@router.patch("/skus/{sku_id}")
+def api_update_sku(
+    sku_id: int,
+    payload: SKUUpdate,
+    # यहाँ अपने ऐप की वास्तविक inventory write permission इस्तेमाल करें।
+    user: User = Depends(require_action("inventory.edit")),
+    db: Session = Depends(get_db),
+):
+    changes = payload.model_dump(exclude_unset=True)
+
+    if not changes:
+        raise HTTPException(400, "अपडेट के लिए कोई फ़ील्ड नहीं भेजी गई")
+
+    if "purchase_cost" in changes and user.role != "OWNER":
+        raise HTTPException(403, "Purchase cost केवल OWNER बदल सकता है")
+
+    sku = db.query(SKU).filter(SKU.id == sku_id).first()
+    if sku is None:
+        raise HTTPException(404, "SKU नहीं मिला")
+
+    try:
+        for field, value in changes.items():
+            setattr(sku, field, value)
+
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            409, "अपडेट डेटाबेस के किसी नियम से टकराता है"
+        ) from None
+    except Exception:
+        db.rollback()
+        raise
+
+    return {"id": sku_id, "updated_fields": list(changes)}
 
 
 @router.get("/availability")
