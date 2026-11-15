@@ -151,6 +151,37 @@ def api_create_location(payload: LocationIn, owner: User = Depends(require_owner
 
 
 @router.get("/skus")
+def api_list_skus(q: str | None = None, user: User = Depends(require_action("inventory.view")), db: Session = Depends(get_db)):
+    query = db.query(SKU)
+    if q:
+        like = f"%{q.strip()}%"
+        query = query.filter((SKU.sku_code.ilike(like)) | (SKU.name.ilike(like)) | (SKU.barcode.ilike(like)))
+    rows = query.order_by(SKU.id.asc()).all()
+    return [
+        {
+            "id": s.id,
+            "sku_code": s.sku_code,
+            "barcode": s.barcode,
+            "name": s.name,
+            "brand": s.brand,
+            "category": s.category,
+            "item_type": s.item_type,
+            "purchase_cost": str(s.purchase_cost) if user.role == "OWNER" else None,
+            "selling_price": str(s.selling_price),
+            "mrp": str(s.mrp),
+            "gst_rate": str(s.gst_rate),
+            "warranty_eligible": s.warranty_eligible,
+            "reorder_point": s.reorder_point,
+            "strategic_role": s.strategic_role,
+        }
+        for s in rows
+    ]
+
+
+@router.post("/skus")
+def api_create_sku(payload: SKUIn, user: User = Depends(require_action("sku.create")), db: Session = Depends(get_db)):
+    return create_sku(db, user, payload.model_dump())
+
 
 Amount = Annotated[Decimal, Field(ge=0, allow_inf_nan=False)]
 
@@ -186,7 +217,6 @@ class SKUUpdate(BaseModel):
 def api_update_sku(
     sku_id: int,
     payload: SKUUpdate,
-    # यहाँ अपने ऐप की वास्तविक inventory write permission इस्तेमाल करें।
     user: User = Depends(require_action("inventory.edit")),
     db: Session = Depends(get_db),
 ):
@@ -229,7 +259,8 @@ def api_stock_availability(
 ):
     if location_id is not None:
         assert_location_access(db, user, location_id, request.client.host if request and request.client else None)
-    return compute_stock_availability(db, sku_id=sku_id, location_id=location_id)
+    location_ids = None if user.role == "OWNER" else evaluate_employee_access(db, user).accessible_location_ids
+    return compute_stock_availability(db, sku_id=sku_id, location_id=location_id, location_ids=location_ids)
 
 
 @router.post("/receive")
@@ -291,7 +322,8 @@ def api_ageing_report(
     user: User = Depends(require_action("inventory.view")),
     db: Session = Depends(get_db),
 ):
-    return compute_inventory_ageing_report(db, as_of_date=as_of)
+    location_ids = None if user.role == "OWNER" else evaluate_employee_access(db, user).accessible_location_ids
+    return compute_inventory_ageing_report(db, as_of_date=as_of, location_ids=location_ids)
 
 
 @router.get("/ledger")

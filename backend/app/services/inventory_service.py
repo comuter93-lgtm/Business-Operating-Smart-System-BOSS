@@ -393,7 +393,7 @@ def transfer_stock(
     return {"transferred_qty": qty, "destination_batches": [b.id for b in created_batches], "idempotent_replay": False}
 
 
-def compute_stock_availability(db: Session, sku_id: int | None = None, location_id: int | None = None) -> list[dict]:
+def compute_stock_availability(db: Session, sku_id: int | None = None, location_id: int | None = None, *, location_ids=None) -> list[dict]:
     q = db.query(InventoryBatch, SKU, Location).join(SKU, InventoryBatch.sku_id == SKU.id).join(
         Location, InventoryBatch.location_id == Location.id
     )
@@ -401,6 +401,9 @@ def compute_stock_availability(db: Session, sku_id: int | None = None, location_
         q = q.filter(InventoryBatch.sku_id == sku_id)
     if location_id is not None:
         q = q.filter(InventoryBatch.location_id == location_id)
+
+    if location_ids is not None:
+        q = q.filter(InventoryBatch.location_id.in_(location_ids))
 
     agg: dict[int, dict] = {}
     for batch, sku, loc in q.all():
@@ -456,7 +459,7 @@ def classify_batch_age(age_days: int, settings_row: BusinessSettings) -> str:
     return "NORMAL"
 
 
-def compute_inventory_ageing_report(db: Session, as_of_date: date | None = None) -> dict:
+def compute_inventory_ageing_report(db: Session, as_of_date: date | None = None, *, location_ids=None) -> dict:
     ref_date = as_of_date or date.today()
     bs = db.query(BusinessSettings).first()
     if not bs:
@@ -467,8 +470,9 @@ def compute_inventory_ageing_report(db: Session, as_of_date: date | None = None)
         .join(SKU, InventoryBatch.sku_id == SKU.id)
         .join(Location, InventoryBatch.location_id == Location.id)
         .filter(InventoryBatch.remaining_qty > 0)
-        .all()
     )
+    if location_ids is not None:
+        batches = batches.filter(InventoryBatch.location_id.in_(location_ids))
 
     items = []
     totals = {"NORMAL": {"units": 0, "value_inr": Decimal("0.00")}, "RED": {"units": 0, "value_inr": Decimal("0.00")}, "CRITICAL": {"units": 0, "value_inr": Decimal("0.00")}}

@@ -1,4 +1,12 @@
 services:
+  web:
+    build: ./frontend
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "127.0.0.1:8080:80"
+
   db:
     image: postgres:16-alpine
     restart: unless-stopped
